@@ -1,0 +1,251 @@
+'''
+This code performs multiple spatial interpolation functions on a series of points to make a 
+prediction on a specified target point.
+
+The spatial interpolation methods included are:
+    1. TIN interpolation
+    2. Inverse distance weight interpolation
+    3. Gaussian kernel interpolation
+    4. Global linear polynomial interpolation
+    5. Thin plate spline interpolation
+    
+The input points are arranged in a 2D numpy array as follows:
+
+    points = np.array([
+        [x1, y1, z1],
+        [x2, y2, z2],
+        [x3, y3, z3],
+        ...
+        [xn, yn, zn]
+    ])
+
+The target point is arranged in a list as follows:
+
+    target = [xt, yt]
+
+'''
+
+import numpy as np
+from scipy.spatial import Delaunay
+import math
+
+####### Function for TIN interpolation ######
+def TINint (points, target):
+    
+    # Compute Delaunay triangulation ignoring z values
+    tri = Delaunay(points[:, :2])
+    
+    # Find which triangle the target falls within
+    targetTri = tri.find_simplex(target)
+
+    # Get coordinates of the target triangle
+    targetTriPoints = points[tri.simplices[targetTri]]
+    
+    # Define x, y, z coordinates for each point
+    x1, y1, z1 = targetTriPoints[0]
+    x2, y2, z2 = targetTriPoints[1]
+    x3, y3, z3 = targetTriPoints[2]
+    x0, y0 = target
+    
+    # Area calculations using surveyor's formula
+    A123 = 0.5 * abs(x1*(y2-y3) + x2*(y3-y1) + x3*(y1-y2))
+    A120 = 0.5 * abs(x1*(y2-y0) + x2*(y0-y1) + x0*(y1-y2))
+    A023 = 0.5 * abs(x0*(y2-y3) + x2*(y3-y0) + x3*(y0-y2))
+    A103 = 0.5 * abs(x1*(y0-y3) + x0*(y3-y1) + x3*(y1-y0))
+    
+    # Define point weights
+    w1 = A023/A123
+    w2 = A103/A123
+    w3 = A120/A123
+    
+    # Calculate interpolated z value
+    z0 = w1*z1 + w2*z2 + w3*z3
+    
+    return z0
+
+####### Function for inverse distance weight interpolation #######
+def IDWint(points, target, p):
+    
+    # Create variables for sum of weights and sum of wz
+    sumWeights = 0
+    sumwz = 0
+    
+    
+    # Loop through points to calculate weights and add them to list
+    for i in points:
+        # Calculate euclidean distance from target point
+        d = math.sqrt((i[0]-target[0])**2 + (i[1]-target[1])**2)
+        w = d**(-p)
+        wz = w*i[2]
+        sumWeights = sumWeights + w
+        sumwz = sumwz + wz
+        
+    
+    # Calculate interpolated z value
+    z0 = sumwz/sumWeights
+    
+    return z0
+
+# Function to find the maximum distance between a set of points and a target point
+def maxDist(points, target):
+    # Create empty list to store distance values
+    dist = []
+    
+    # Loop through points and calculate distance, add it to dist list
+    for i in points:
+        d = math.sqrt((i[0]-target[0])**2 + (i[1]-target[1])**2)
+        dist.append(d)
+        
+    maxDist = max(dist)
+    return maxDist
+    
+    
+###### Function for Gaussian kernel interpolation ######
+def gaussKernInt (points, target, bandwidth = None):
+    
+    if bandwidth is None:
+        bandwidth = maxDist(points, target)
+    
+    # Create variables for sum of weights and sum of wz
+    sumK = 0
+    sumKz = 0
+    
+    # Loop through points to calculate K, Kz and sum them
+    for i in points:
+        # Calculate euclidean distance
+        d = math.sqrt((i[0]-target[0])**2 + (i[1]-target[1])**2)
+        K = (1/(2*math.pi))*math.e**(-0.5*(d/bandwidth)**2)
+        Kz = K*i[2]
+        sumK = sumK + K
+        sumKz = sumKz + Kz
+    
+    # Calculate interpolated z value
+    z0 = sumKz/sumK
+    
+    return z0
+
+###### Function for global polynomial interpolation #######
+def globalPolyInt(points, target):
+    
+    # Define matrix values
+    n = points.shape[0]
+    sum_x = np.sum(points[:,0])
+    sum_y = np.sum(points[:,1])
+    sum_xy = np.dot(points[:,0], points[:,1])
+    sum_x2 = np.sum(points[:,0]**2)
+    sum_y2 = np.sum(points[:,1]**2)
+    sum_z = np.sum(points[:,2])
+    sum_xz = np.dot(points[:,0], points[:,2])
+    sum_yz = np.dot(points[:,1], points[:,2])
+    
+    # Construct matrix
+    mat = np.array([
+        [n, sum_x, sum_y],
+        [sum_x, sum_x2, sum_xy],
+        [sum_y, sum_xy, sum_y2]
+    ])
+    
+    # Inverse matrix
+    matinv = np.linalg.inv(mat)
+    
+    # z vector
+    zvec = np.array([
+        [sum_z],
+        [sum_xz],
+        [sum_yz]
+    ])
+    
+    # Calculate factors [c,a,b]
+    factors = np.dot(matinv, zvec)
+    c = factors[0]
+    a = factors[1]
+    b = factors[2]
+    
+    # Calculate predicted z0
+    z0 = a*target[0] + b*target[1] + c
+    
+    return z0.item()
+
+
+###### Function for thin plate spline interpolation ######
+def TPSint(points, target):
+    
+    numPoints = points.shape[0]
+
+    # Remove z values from points
+    points_2d = points[:,:2]
+
+    # Append target point to points array
+    allPoints = np.append(points_2d, [target], axis=0)
+
+
+    # Create empty distance matrix, phi matrix
+    distMat = np.empty((numPoints+1, numPoints+1))
+    phiMat = np.empty((numPoints+1, numPoints+1))
+
+    # Loop through points, calculate distance and add to distance matrix, calculate phi matrix
+    for i in range(numPoints+1):
+        for j in range(numPoints+1):
+            distij = math.sqrt((allPoints[i][0]-allPoints[j][0])**2 + (allPoints[i][1]-allPoints[j][1])**2)
+            distMat[i,j] = distij
+
+            if distij == 0:
+                phiMat[i,j] = 0
+            else:
+                phiMat[i,j] = distij**2 * math.log10(distij)
+
+
+    # Create z vector
+    zVec = np.vstack((points[:,2].reshape(-1,1), np.zeros((3,1))))
+
+    # Create psi matrix
+    psiMat = np.empty((numPoints+3, numPoints+3))
+
+    # Fill psi matrix
+    psiMat[:numPoints,:numPoints] = phiMat[:numPoints,:numPoints]
+    psiMat[:numPoints,-2:] = points[:,:2]
+    psiMat[-2:,:numPoints] = points[:,:2].T
+    psiMat[:numPoints,-3:-2]=np.ones((5,1))
+    psiMat[numPoints,:numPoints] = np.ones((1,5))
+    psiMat[-3:,-3:] = np.zeros((3,3))
+
+    # Calculate psi inverse matrix
+    psiMatInv = np.linalg.inv(psiMat)
+
+    # Calculate factors
+    factors = np.dot(psiMatInv, zVec)
+
+    # Calculate predicted z0
+    z0 = np.sum(factors[:numPoints]*phiMat[:numPoints,-1].reshape(-1,1)) + factors[-3] + factors[-2]*target[0] + factors[-1]*target[1]
+
+    return z0.item()
+
+        
+    
+    
+######### INPUT VALUES HERE ###########        
+    
+# Define points with known z values
+points = np.array([
+    [86, 73, 14.6],
+    [88, 53, 10.56],
+    [69, 76, 20.82],
+    [59, 64, 10.91],
+    [75, 52, 10.38]
+])
+
+# Define target point with unknown z value
+target = [75.4,63.6]
+
+# Run interpolation and return results
+TIN_result = TINint(points, target)
+IDW_result = IDWint(points, target, 2)
+gaussKern_result = gaussKernInt(points, target)
+globalPoly_result = globalPolyInt(points, target)
+TPS_result = TPSint(points, target)
+
+print("TIN interpolation result:", TIN_result)
+print("IDW interpolation result:", IDW_result)
+print("Gaussian kernel interpolation result:", gaussKern_result)
+print("Global linear polynomial interpolation result: ", globalPoly_result)
+print("Thin plate spline interpolation result: ", TPS_result)
